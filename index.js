@@ -21,41 +21,63 @@ Cashfree.XClientId = process.env.CLIENT_ID;
 Cashfree.XClientSecret = process.env.CLIENT_SECRET;
 Cashfree.XEnvironment = Cashfree.Environment.SANDBOX;
 
+app.get('/',(req,res)=>{
+  res.send("Welcome to cashfree backend")
+})
+
+
 // Route to create a payment order
 app.get("/payment", async (req, res) => {
   try {
-    const orderId = generateOrderId();
+    const orderId = await generateOrderId();
 
     const requestData = {
-      order_id: orderId,
-      order_amount: 1.0,
-      order_currency: "INR",
       customer_details: {
-        customer_id: "sai01",
-        customer_phone: "9090990999",
-        customer_name: "Sai",
-        customer_email: "sai@gmail.com",
+        customer_id: 'sai01',
+        customer_phone: '9090990999',
+        customer_name: 'Sai',
+        customer_email: 'sai@gmail.com',
       },
+      link_notify: {
+        send_sms: true,
+        send_email: true,
+      },
+      link_purpose: 'Test Payment', // ✅ FIXED here
+      link_amount: 10.0,
+      link_currency: 'INR',
+      link_id: orderId, // optional
     };
 
-    const response = await Cashfree.PGCreateOrder("2023-08-01", requestData);
-    const paymentSessionId = response.data.payment_session_id;
-    const paymentLink = `https://payments.cashfree.com/pg/view/payment?payment_session_id=${paymentSessionId}`;
+    const response = await axios.post(
+      'https://sandbox.cashfree.com/pg/links', // use api.cashfree.com for production
+      requestData,
+      {
+        headers: {
+          'x-client-id': process.env.CLIENT_ID,
+          'x-client-secret': process.env.CLIENT_SECRET,
+          'x-api-version': '2022-09-01',
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    const link = response.data.link_url;
 
     res.json({
       status: true,
-      message: "Created order successfully",
+      message: 'Created payment link successfully',
       data: {
-        ...response.data,
-        payment_link: paymentLink,
+        orderId,
+        paymentLink: link,
+        fullResponse: response.data,
       },
     });
 
   } catch (error) {
-    console.error("Error creating order:", error.response?.data || error.message);
+    console.error('Cashfree error:', error.response?.data || error.message);
     res.status(500).json({
       status: false,
-      message: "Failed to create order",
+      message: 'Failed to create payment link',
       error: error.response?.data || error.message,
     });
   }
@@ -63,25 +85,77 @@ app.get("/payment", async (req, res) => {
 
 
 
+// app.post("/verify", async (req, res) => {
+//   // console.log("Incoming verify payload:", req.body);
+//   const { order_id } = req.body;
+
+//   try {
+//     let version = "2023-08-01";
+//     const response = await Cashfree.PGFetchOrder(version, order_id);
+//     const orderData = response.data;
+
+//     console.log("Order fetched successfully:", orderData);
+
+//     if (orderData.order_status === "PAID") {
+//       return res.json({ status: true, message: "Payment successful", order: orderData });
+//     } else {
+//       return res.json({ status: false, message: `Payment not successful. Status: ${orderData.order_status}`, order: orderData });
+//     }
+//   } catch (error) {
+//     console.error("Error verifying order:", error.response?.data || error.message);
+//     res.status(500).json({ error: "Failed to verify order" });
+//   }
+// });
+
+
 app.post("/verify", async (req, res) => {
-  // console.log("Incoming verify payload:", req.body);
   const { order_id } = req.body;
 
+  // 1. Validate input
+  if (!order_id || typeof order_id !== "string") {
+    return res.status(400).json({ error: "Invalid order_id" });
+  }
+
   try {
-    let version = "2023-08-01";
-    const response = await Cashfree.PGFetchOrder(version, order_id);
+    // 2. Fetch order status (latest API version)
+    const version = "2024-01-01";
+    const response = await Cashfree.PGFetchOrder(version, order_id, {
+      timeout: 10000, // 10-second timeout
+    });
     const orderData = response.data;
 
-    console.log("Order fetched successfully:", orderData);
+    console.log("Order status:", orderData.order_status);
 
+    // 3. Handle status
     if (orderData.order_status === "PAID") {
-      return res.json({ status: true, message: "Payment successful", order: orderData });
+      return res.json({ 
+        status: true, 
+        message: "Payment successful", 
+        order: orderData 
+      });
     } else {
-      return res.json({ status: false, message: `Payment not successful. Status: ${orderData.order_status}`, order: orderData });
+      return res.json({ 
+        status: false, 
+        message: `Payment status: ${orderData.order_status}`,
+        order: orderData 
+      });
     }
+
   } catch (error) {
-    console.error("Error verifying order:", error.response?.data || error.message);
-    res.status(500).json({ error: "Failed to verify order" });
+    console.error("Error:", {
+      message: error.message,
+      response: error.response?.data,
+    });
+
+    // 4. Specific error handling
+    if (error.response?.status === 404) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+    if (error.code === "ECONNABORTED") {
+      return res.status(504).json({ error: "Cashfree API timeout" });
+    }
+
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
