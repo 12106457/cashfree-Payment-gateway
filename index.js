@@ -46,6 +46,7 @@ app.get("/payment", async (req, res) => {
       link_amount: 10.0,
       link_currency: 'INR',
       link_id: orderId, // optional
+      return_url: 'myapp://payment/status',
     };
 
     const response = await axios.post(
